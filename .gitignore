@@ -1,0 +1,33 @@
+# Virtual Environments & Caches
+env/
+__pycache__/
+*.pyc
+*.cache
+
+# Notebook Checkpoints
+.ipynb_checkpoints/
+
+# Sensitive or Local Data
+KnowFlow/data/
+KnowFlow/.env
+KnowFlow/Gpt key.txt
+KnowFlow/Gpt key-Nandha.txt
+
+# Logs
+*.log
+
+# Editor/OS Generated Files
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+echo env/ >> .gitignore
+echo __pycache__/ >> .gitignore
+echo *.pyc >> .gitignore
+echo .ipynb_checkpoints/ >> .gitignore
+echo KnowFlow/data/ >> .gitignore
+echo KnowFlow/.env >> .gitignore
+echo KnowFlow/Gpt key.txt >> .gitignore
+echo KnowFlow/Gpt key-Nandha.txt >> .gitignore
+echo *.log >> .gitignore
+echo .vscode/ >> .gitignore
