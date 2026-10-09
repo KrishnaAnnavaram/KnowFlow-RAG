@@ -9,7 +9,7 @@
 ![Roles](https://img.shields.io/badge/Roles-3-1F3864?style=for-the-badge)
 ![Levels](https://img.shields.io/badge/Levels-Junior_%C2%B7_Mid_%C2%B7_Senior-2E5FD9?style=for-the-badge)
 ![Retrievers](https://img.shields.io/badge/Retrievers-BM25_%C2%B7_FAISS_%C2%B7_hybrid-6E86E8?style=for-the-badge)
-![Python files](https://img.shields.io/badge/Python_files-9_(1_empty)-F5C542?style=for-the-badge)
+![Python files](https://img.shields.io/badge/Python_files-8_(1_empty)-F5C542?style=for-the-badge)
 ![Tests](https://img.shields.io/badge/Tests-0-C0392B?style=for-the-badge)
 ![Report](https://img.shields.io/badge/Report-6_pages-A0399B?style=for-the-badge)
 ![Install guide](https://img.shields.io/badge/Install_guide-2_pages-3DA35B?style=for-the-badge)
@@ -82,6 +82,7 @@ This README is the **one location that explains all of KnowFlow-RAG**. It gives 
 4. 🔄 [The end-to-end workflow](#4-the-end-to-end-workflow)
    - 4.1 [Full flow](#41-full-flow)
    - 4.2 [The life cycle of one question](#42-the-life-cycle-of-one-question)
+   - 4.3 [Who does which step](#43-who-does-which-step)
 5. 📄 [Document load and chunk split](#5-document-load-and-chunk-split)
 6. 🎯 [The role and level filter](#6-the-role-and-level-filter)
 7. 🔍 [The retrievers](#7-the-retrievers)
@@ -121,7 +122,7 @@ KnowFlow gives each of these questions its own component.
 | Retrievers | BM25 (keyword), FAISS (semantic, OpenAI embeddings) and hybrid (both) |
 | Generation | OpenAI `gpt-4`, `temperature=0.3`, with a tone instruction for each level |
 | User interface | Streamlit app `KnowFlow/ui/app.py` at `http://localhost:8501` |
-| Code size | 9 Python files. `main.py` is empty. The other 8 files have 383 lines |
+| Code size | 8 Python files. `main.py` is empty. The other 7 files have 383 lines |
 | Tests | None |
 | Origin | A group project of the Department of Information Science, University of North Texas. The report lists five student authors and one faculty advisor |
 | Documents | Installation guide (2 pages), project report (6 pages), presentation (13 slides, only in git history) |
@@ -150,6 +151,40 @@ flowchart LR
 | Streamlit UI | `KnowFlow/ui/app.py` | Sidebar, chat box, chat history, feedback controls and Excel export |
 | Entry point | `KnowFlow/main.py` | Empty file (0 bytes) |
 | Dependencies | `KnowFlow/requirements.txt` | 136 pinned packages, encoded as UTF-16 |
+
+The component map shows which module calls which module. An arrow points from the caller to the module that it uses. A dotted arrow shows code that does not run in the app.
+
+```mermaid
+flowchart TB
+    subgraph UIG["ui/app.py"]
+        APP["Streamlit page<br/>sidebar, chat, feedback"]
+        FAI["FAISSRetriever, inline<br/>OpenAIEmbeddings"]
+        AGT["LangChain agent<br/>initialize_agent, 3 Tool objects"]
+    end
+    PRE["utils/preprocess.py<br/>load_documents, split_documents"]
+    ROLE["agents/role_agent.py<br/>filter_docs_by_role_and_level"]
+    BM["retrieval/bm25.py<br/>BM25Retriever"]
+    HY["retrieval/hybrid_search.py<br/>HybridSearch"]
+    GEN["generation/rag_generator.py<br/>generate_answer"]
+    RANK["rank_documents<br/>all-MiniLM-L6-v2"]
+    FV["retrieval/faiss_vector.py<br/>FAISSRetriever, HuggingFace"]
+    MAIN["main.py<br/>empty"]
+
+    APP --> PRE
+    APP --> ROLE
+    APP --> BM
+    APP --> FAI
+    APP --> HY
+    APP --> AGT
+    APP --> GEN
+    AGT --> BM
+    AGT --> FAI
+    AGT --> HY
+    HY --> BM
+    HY --> FAI
+    GEN -. "only without a context" .-> RANK
+    APP -. "imported, then replaced" .-> FV
+```
 
 ### 2.2 System context
 
@@ -213,6 +248,16 @@ git show "6fff8c4:POWERPOINT PRESENTATION GROUP 3.pptx" > "POWERPOINT PRESENTATI
 ### 3.1 The role and the level control the content
 The app filters the chunks with the keywords of the selected role and level before any search. A chunk with no keyword of that role and level does not go to a retriever.
 
+```mermaid
+flowchart LR
+    CH[/"All chunks"/] --> F{"Chunk text holds a keyword<br/>of the role and level?"}
+    SEL[/"Role and level<br/>from the sidebar"/] --> F
+    F -- "yes" --> KEEP["Kept chunks"]
+    F -- "no" --> DROP["Not indexed"]
+    KEEP --> BM["BM25Retriever"]
+    KEEP --> FA["FAISSRetriever"]
+```
+
 ### 3.2 Two search methods are available
 BM25 finds exact words such as tool names. FAISS finds chunks with a similar meaning. The hybrid retriever gives the results of both methods.
 
@@ -235,25 +280,64 @@ The code reads `OPENAI_API_KEY` from the environment or from a `.env` file. Git 
 ### 4.1 Full flow
 
 ```mermaid
-flowchart TB
-    Q["User question in st.chat_input"] --> LOAD["load_documents: PDFs in data/knowledge_base"]
-    LOAD --> SPLIT["split_documents: 500 characters, overlap 50"]
+flowchart TD
+    Q[/"Question in st.chat_input"/] --> HIST[("st.session_state.chat_history")]
+    SEL[/"Role and level in the sidebar<br/>default Data Analyst, Mid"/] --> FIL
+    KB[("data/knowledge_base<br/>PDF files, not in git")] --> LOAD["load_documents<br/>PyPDFLoader for each .pdf"]
+    Q --> LOAD
+    LOAD --> SPLIT["split_documents<br/>500 characters, overlap 50"]
     SPLIT --> FIL["filter_docs_by_role_and_level"]
-    FIL --> BM["BM25Retriever"]
-    FIL --> FA["FAISSRetriever with OpenAIEmbeddings"]
+    FIL --> ANY{"Any chunk kept?"}
+    ANY -- "no" --> ERR[/"Error, the app stops"/]
+    ANY -- "yes" --> BM["BM25Retriever"]
+    ANY -- "yes" --> FA["FAISSRetriever<br/>OpenAIEmbeddings"]
     BM --> HY["HybridSearch"]
     FA --> HY
-    BM --> TOOLS["Three LangChain tools"]
-    FA --> TOOLS
-    HY --> TOOLS
-    TOOLS --> AG["Agent: ZERO_SHOT_REACT_DESCRIPTION on gpt-4"]
-    AG --> GEN["generate_answer: history, context, tone, gpt-4"]
-    GEN --> CHAT["Chat history and answer"]
-    CHAT --> FB["Feedback row in session state"]
-    FB --> XLS["Export: feedback_log.xlsx"]
+    BM --> AG["Agent: ZERO_SHOT_REACT_DESCRIPTION<br/>on gpt-4, three tools"]
+    FA --> AG
+    HY --> AG
+    AG --> GEN["generate_answer<br/>history, agent result, tone, gpt-4"]
+    HIST --> GEN
+    GEN --> ANS[/"Answer in the chat"/]
+    ANS -- "first display,<br/>default Yes, empty comment" --> LOG[("st.session_state.feedback_log")]
+    ANS --> RATE{{"HUMAN<br/>Was this helpful? Yes or No, comment"}}
+    RATE -. "later changes are not saved" .-> LOG
+    LOG --> EXP{{"HUMAN<br/>click Export Feedback to Excel"}}
+    EXP --> XLS[/"feedback_log.xlsx"/]
+
+    classDef human fill:#fff3cd,stroke:#b8901f,color:#3d2f00,font-weight:bold
+    class RATE,EXP human
 ```
 
 ### 4.2 The life cycle of one question
+
+```mermaid
+stateDiagram-v2
+    state "Typed in the chat box" as Typed
+    state "In chat_history, no answer" as Pending
+    state "Chunks loaded and split" as Chunked
+    state "Chunks filtered" as Filtered
+    state "Indexes built" as Indexed
+    state "Agent result" as AgentResult
+    state "Answered" as Answered
+    state "Feedback row saved" as Logged
+    state "Exported to Excel" as Exported
+    state "Stopped with an error" as Failed
+    [*] --> Typed
+    Typed --> Pending: chat_history.append
+    Pending --> Chunked: load_documents, split_documents
+    Pending --> Failed: no data/knowledge_base folder
+    Chunked --> Filtered: filter_docs_by_role_and_level
+    Filtered --> Failed: no chunk kept
+    Filtered --> Indexed: BM25Retriever, FAISSRetriever
+    Indexed --> AgentResult: agent.invoke
+    AgentResult --> Answered: generate_answer
+    Answered --> Logged: first display, default Yes
+    Logged --> Exported: export button
+    Logged --> [*]: session ends
+    Exported --> [*]
+    Failed --> [*]
+```
 
 1. The user selects a role and a level in the sidebar. The defaults are `Data Analyst` and `Mid`.
 2. The user types a question in the chat box.
@@ -266,11 +350,58 @@ flowchart TB
 9. The app shows the answer and a feedback control under it.
 10. The app adds one feedback row for the answer to `st.session_state.feedback_log`.
 
+### 4.3 Who does which step
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Employee
+    participant APP as ui/app.py
+    participant PRE as preprocess.py
+    participant ROLE as role_agent.py
+    participant EMB as OpenAI embeddings API
+    participant AG as LangChain agent
+    participant GPT as OpenAI chat API gpt-4
+    participant GEN as rag_generator.py
+
+    U->>APP: select role and level, type a question
+    APP->>APP: chat_history.append
+    APP->>PRE: load_documents, then split_documents
+    PRE-->>APP: chunks
+    APP->>ROLE: filter_docs_by_role_and_level
+    ROLE-->>APP: kept chunks
+    APP->>APP: BM25Retriever on the kept chunks
+    APP->>EMB: FAISS.from_documents, embed all kept chunks
+    APP->>AG: agent.invoke(query)
+    loop ReAct steps
+        AG->>GPT: question, tool names and descriptions
+        GPT-->>AG: next action
+        AG->>EMB: embed the query, FAISS and Hybrid tools only
+        AG->>AG: run the BM25, FAISS or Hybrid tool
+    end
+    AG-->>APP: dictionary with input and output
+    APP->>GEN: generate_answer(history, level, role, raw_context)
+    GEN->>GPT: one user message, temperature 0.3
+    GPT-->>GEN: answer
+    GEN-->>APP: answer text
+    APP-->>U: answer, Yes or No control, comment box
+```
+
 ---
 
 ## 5. Document load and chunk split
 
 **Purpose.** Change the PDF files of the knowledge base into small text chunks.
+
+```mermaid
+flowchart LR
+    DIR[/"data/knowledge_base<br/>relative to the current folder"/] --> LS["os.listdir<br/>top folder only"]
+    LS --> PDF{"Name ends<br/>with .pdf?"}
+    PDF -- "no" --> SKIP["Skip the file"]
+    PDF -- "yes" --> LD["PyPDFLoader.load<br/>one Document for each page"]
+    LD --> SP["RecursiveCharacterTextSplitter<br/>chunk_size 500, chunk_overlap 50"]
+    SP --> OUT[/"Document chunks"/]
+```
 
 | Input | Output |
 |---|---|
@@ -293,6 +424,18 @@ flowchart TB
 ## 6. The role and level filter
 
 **Purpose.** Keep only the chunks that are relevant to the role and the level of the user.
+
+```mermaid
+flowchart LR
+    IN[/"Chunks, role, level"/] --> KW["role_level_keywords<br/>get the role, then the level"]
+    KW --> KN{"Known role<br/>and level?"}
+    KN -- "no" --> EL["Empty keyword list"]
+    KN -- "yes" --> LST["4 to 6 keywords"]
+    EL --> T{"A lower-case keyword is a substring<br/>of the lower-case chunk text?"}
+    LST --> T
+    T -- "yes" --> KEEP[/"Kept chunk"/]
+    T -- "no" --> DROP["Dropped chunk"]
+```
 
 | Input | Output |
 |---|---|
@@ -323,6 +466,34 @@ flowchart TB
 
 **Purpose.** Find the chunks that answer the question.
 
+The BM25 and FAISS retrievers:
+
+```mermaid
+flowchart TD
+    K[/"Kept chunks"/] --> BT["Split each chunk text<br/>on whitespace, case kept"]
+    BT --> BO["BM25Okapi"]
+    K --> FE["OpenAIEmbeddings<br/>embed each chunk"]
+    FE --> FX["FAISS.from_documents<br/>in memory"]
+    Q[/"Query text from the agent"/] --> BQ["query.split, get_scores"]
+    BO --> BQ
+    BQ --> BR[/"BM25: top 3 by score"/]
+    Q --> FQ["similarity_search, k 3"]
+    FX --> FQ
+    FQ --> FR[/"FAISS: top 3 by similarity"/]
+```
+
+The hybrid retriever, `HybridSearch.search`:
+
+```mermaid
+flowchart LR
+    Q[/"Query"/] --> B["bm25.search<br/>3 chunks"]
+    Q --> F["faiss.search<br/>3 chunks"]
+    B --> J["BM25 chunks first,<br/>then FAISS chunks"]
+    F --> J
+    J --> D["Dictionary on page_content<br/>removes repeated text"]
+    D --> T[/"First 3 chunks"/]
+```
+
 | Retriever | Class | Method | Result |
 |---|---|---|---|
 | BM25 | `BM25Retriever` (`retrieval/bm25.py`) | `BM25Okapi` scores on whitespace tokens. No lower-case change | Top 3 chunks |
@@ -349,6 +520,29 @@ flowchart TB
 
 **Purpose.** Select the search method for each question.
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant APP as ui/app.py
+    participant AG as Agent ZERO_SHOT_REACT_DESCRIPTION
+    participant LLM as ChatOpenAI gpt-4
+    participant T as Tool function
+    participant R as Retriever
+
+    APP->>AG: agent.invoke(query), question only
+    loop Until the model gives a final answer
+        AG->>LLM: question, tool names, tool descriptions, earlier steps
+        LLM-->>AG: thought, tool name and tool input
+        AG->>T: tool_bm25_func, tool_faiss_func or tool_hybrid_func
+        T->>R: search(input)
+        R-->>T: 3 chunks
+        T-->>AG: chunk texts joined with line breaks
+    end
+    AG->>LLM: question and all tool outputs
+    LLM-->>AG: final answer
+    AG-->>APP: dictionary with input and output
+```
+
 | Tool name | Function | Description given to the agent |
 |---|---|---|
 | `BM25 Retriever` | `tool_bm25_func` | `Keyword-based search.` |
@@ -372,6 +566,25 @@ flowchart TB
 ## 9. Answer generation and tone
 
 **Purpose.** Write the final answer in the tone of the level of the user.
+
+```mermaid
+flowchart TD
+    IN[/"query, chat_history, level, role,<br/>raw_context = agent result"/] --> RC{"raw_context empty?"}
+    RC -- "yes, never in the app" --> RK["rank_documents<br/>all-MiniLM-L6-v2, top 5"]
+    RK --> CJ["Join the chunk texts"]
+    RC -- "no" --> CX["Context = raw_context<br/>the agent dictionary as text"]
+    CJ --> H["History as User and Bot lines"]
+    CX --> H
+    H --> LV{"level"}
+    LV -- "Junior" --> TJ["Simple, beginner-friendly"]
+    LV -- "Mid" --> TM["Clear, moderate technical depth"]
+    LV -- "Senior or other" --> TS["Advanced, professional terms"]
+    TJ --> P["Prompt: history, Context, Instruction,<br/>This answer is for a level role, User, Bot"]
+    TM --> P
+    TS --> P
+    P --> API["client.chat.completions.create<br/>gpt-4, temperature 0.3"]
+    API --> OUT[/"Answer text, stripped"/]
+```
 
 | Input | Output |
 |---|---|
@@ -403,6 +616,26 @@ flowchart TB
 ## 10. The Streamlit UI and the feedback log
 
 **Purpose.** Let the user ask questions, read answers and rate them.
+
+```mermaid
+flowchart TD
+    RUN["Each Streamlit rerun"] --> LOOP["For each entry i in chat_history"]
+    LOOP --> SHOW["Show the You and KnowFlow blocks<br/>unsafe_allow_html=True"]
+    SHOW --> W["Radio Yes or No, default Yes,<br/>comment text box"]
+    W --> USER{{"HUMAN<br/>set the feedback and the comment"}}
+    USER -. "next rerun" .-> RUN
+    W --> HAS{"feedback_log has<br/>a row for i?"}
+    HAS -- "no" --> ADD["Append the row: question, answer,<br/>feedback, comment, role, level"]
+    HAS -- "yes" --> KEEP["Keep the old row"]
+    ADD --> LOG[("st.session_state.feedback_log")]
+    KEEP --> LOG
+    BTN{{"HUMAN<br/>click Export Feedback to Excel"}} --> XL["pandas DataFrame.to_excel"]
+    LOG --> XL
+    XL --> F[/"feedback_log.xlsx<br/>in the current folder, replaced"/]
+
+    classDef human fill:#fff3cd,stroke:#b8901f,color:#3d2f00,font-weight:bold
+    class USER,BTN human
+```
 
 | UI element | Location | Function |
 |---|---|---|
@@ -526,6 +759,20 @@ The chatbot opens in your browser at `http://localhost:8501`.
 
 **From the code:** run the command in the `KnowFlow` folder. The app loads `data/knowledge_base` relative to the current folder.
 
+The diagram shows the order of the setup steps and the files that the app needs.
+
+```mermaid
+flowchart LR
+    CL["git clone"] --> CD["cd KnowFlow-RAG/KnowFlow"]
+    CD --> VE["python -m venv env,<br/>activate"]
+    VE --> RQ["pip install -r requirements.txt"]
+    RQ --> EX["pip install langchain-community<br/>langchain-openai openpyxl"]
+    EX --> ENV[/"KnowFlow/.env<br/>OPENAI_API_KEY"/]
+    ENV --> KB[("KnowFlow/data/knowledge_base<br/>your PDF files")]
+    KB --> RUN["streamlit run ui/app.py"]
+    RUN --> BR[/"Browser at localhost:8501"/]
+```
+
 ### 13.4 Environment variables
 
 | Variable | Used by | Meaning |
@@ -534,6 +781,18 @@ The chatbot opens in your browser at `http://localhost:8501`.
 | `STREAMLIT_WATCHER_TYPE` | `ui/app.py` | The app sets it to `none` to stop the file watcher. Do not set it |
 
 The app reads a local `.env` file with `python-dotenv`. The model name `gpt-4`, the chunk size 500, the overlap 50 and the top 3 results are fixed in the code.
+
+```mermaid
+flowchart LR
+    ENVF[/"KnowFlow/.env"/] --> LD1["load_dotenv in ui/app.py"]
+    ENVF --> LD2["load_dotenv in rag_generator.py"]
+    LD1 --> KEY["OPENAI_API_KEY<br/>in the process environment"]
+    LD2 --> KEY
+    SHELL[/"Shell environment"/] --> KEY
+    KEY --> E1["OpenAIEmbeddings<br/>FAISS index"]
+    KEY --> E2["ChatOpenAI<br/>agent"]
+    KEY --> E3["OpenAI client<br/>generate_answer"]
+```
 
 ---
 
